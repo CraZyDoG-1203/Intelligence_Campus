@@ -1,24 +1,20 @@
 import uvicorn
 from fastapi import FastAPI
-from api import app as api_app
+from api import app as api_app  # 確保 api.py 在同一個目錄
 
 app = FastAPI()
 
-# 將所有在 api.py 定義的路由掛載到 /api 下
+# 修正點：掛載 API
+# 如果 api_app 內部的路由已經包含了完整路徑，直接掛載會讓路徑變長
+# 建議：直接將 api.py 的路由整合，或確保前端呼叫路徑正確
 app.mount("/api", api_app)
 
 @app.get("/")
 async def root():
     return {
-        "message": "Integrated Sensor & Weather & Marquee API is active",
-        "endpoints": {
-            "sensors": "/api/sensor/latest",
-            "weather": "/api/get-latest-radar",
-            "marquees": "/api/marquees",
-            "docs": "/docs"
-        }
+        "message": "Integrated Sensor & Weather & Marquee API",
     }
 
 if __name__ == "__main__":
-    # 啟動時請確保檔案名稱為 main.py
+    # 使用 main:app 啟動
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
