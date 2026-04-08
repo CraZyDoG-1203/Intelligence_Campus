@@ -1,12 +1,17 @@
 import uvicorn
 from fastapi import FastAPI
-from api import app as api_app  # 確保 api.py 在同一個目錄
+from api import app as api_app  
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# 修正點：掛載 API
-# 如果 api_app 內部的路由已經包含了完整路徑，直接掛載會讓路徑變長
-# 建議：直接將 api.py 的路由整合，或確保前端呼叫路徑正確
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/api", api_app)
 
 @app.get("/")
