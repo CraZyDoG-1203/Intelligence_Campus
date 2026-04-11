@@ -21,6 +21,8 @@ API_KEY_NAME = "X-API-KEY"
 API_KEY = os.getenv("API_SECRET_KEY", "stan-default-secret")
 BUCKET_NAME = "satellite-images"
 TABLE_NAME = "satellite_images"
+RADAR_IMAGE_TYPES = ["radar_echo"]
+VISIBLE_IMAGE_TYPES = ["visible_light", "visible_image", "satellite_visible", "cloud_visible", "visible"]
 
 # 檢查 Supabase 設定是否存在，避免啟動崩潰
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -127,6 +129,45 @@ def fetch_weather_img(base_url, file_prefix, separator, time_format, sub_folder,
             continue
     raise HTTPException(status_code=404, detail=f"Failed to fetch {img_type}")
 
+
+def build_public_url(storage_path: str) -> str:
+    if not storage_path:
+        return ""
+
+    public_url_response = supabase.storage.from_(BUCKET_NAME).get_public_url(storage_path)
+    if isinstance(public_url_response, dict):
+        return public_url_response.get("publicURL", "")
+    return public_url_response
+
+
+def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
+    time_threshold = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d-%H-%M")
+    response = (
+        supabase.table(TABLE_NAME)
+        .select("id, obs_time, image_url, type")
+        .in_("type", image_types)
+        .gte("obs_time", time_threshold)
+        .order("obs_time", desc=True)
+        .execute()
+    )
+
+    items = []
+    for row in response.data or []:
+        storage_path = row.get("image_url", "")
+        items.append(
+            {
+                **row,
+                "public_url": build_public_url(storage_path),
+            }
+        )
+
+    return {
+        "status": "success",
+        "hours": hours,
+        "count": len(items),
+        "data": items,
+    }
+
 # --- API 路由 ---
 @app.get("/sensor/history")
 async def get_sensor_history(device_id: str = "ab170023"):
@@ -160,6 +201,16 @@ async def stored_radar():
 @app.get("/stored-satellite")
 async def stored_satellite():
     return fetch_weather_img("https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/", "TWI_IR1_MB_800", "-", "%Y-%m-%d-%H-%M", "cloud", "cloud_image", "jpg", True)
+
+
+@app.get("/radar/last-3-hours")
+async def get_last_3_hours_radar():
+    return fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3)
+
+
+@app.get("/visible/last-3-hours")
+async def get_last_3_hours_visible():
+    return fetch_recent_weather_images(VISIBLE_IMAGE_TYPES, hours=3)
 
 @app.get("/marquees")
 async def get_active_marquees():

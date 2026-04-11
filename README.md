@@ -57,6 +57,10 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
   - 抓取最新可用雷達影像，並上傳至 Supabase Storage
 - `GET /api/stored-satellite`
   - 抓取最新可用衛星雲圖，並上傳至 Supabase Storage
+- `GET /api/radar/last-3-hours`
+  - 直接從 Supabase `satellite_images` table 讀取近 3 小時的雷達回波資料
+- `GET /api/visible/last-3-hours`
+  - 直接從 Supabase `satellite_images` table 讀取近 3 小時的可見光圖資料
 
 影像資料會寫入：
 
@@ -156,6 +160,18 @@ curl http://127.0.0.1:8000/api/sensor/latest
 
 ```bash
 curl "http://127.0.0.1:8000/api/sensor/history?device_id=ab170023"
+```
+
+取得近 3 小時雷達回波：
+
+```bash
+curl http://127.0.0.1:8000/api/radar/last-3-hours
+```
+
+取得近 3 小時可見光圖：
+
+```bash
+curl http://127.0.0.1:8000/api/visible/last-3-hours
 ```
 
 建立跑馬燈：
