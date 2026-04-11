@@ -22,7 +22,14 @@ API_KEY = os.getenv("API_SECRET_KEY", "stan-default-secret")
 BUCKET_NAME = "satellite-images"
 TABLE_NAME = "satellite_images"
 RADAR_IMAGE_TYPES = ["radar_echo"]
-VISIBLE_IMAGE_TYPES = ["visible_light", "visible_image", "satellite_visible", "cloud_visible", "visible"]
+SATELLITE_IMAGE_TYPES = [
+    "cloud_image",
+    "visible_light",
+    "visible_image",
+    "satellite_visible",
+    "cloud_visible",
+    "visible",
+]
 
 # 檢查 Supabase 設定是否存在，避免啟動崩潰
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -210,7 +217,7 @@ async def get_last_3_hours_radar():
 
 @app.get("/visible/last-3-hours")
 async def get_last_3_hours_visible():
-    return fetch_recent_weather_images(VISIBLE_IMAGE_TYPES, hours=3)
+    return fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3)
 
 @app.get("/marquees")
 async def get_active_marquees():
