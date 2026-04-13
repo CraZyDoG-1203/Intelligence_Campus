@@ -65,6 +65,7 @@ CATEGORY_CONFIG = {
 }
 
 DEVICES = ['ab170023', 'ab170019', 'ab170010']
+TZ_TAIWAN = timezone(timedelta(hours=8))
 
 # --- 工具函式 ---
 async def get_api_key(api_key_from_header: str = Security(api_key_header)):
@@ -107,14 +108,23 @@ class AeroboxManager:
             print(f"Supabase Error: {e}")
             return None
 
-def fetch_weather_img(base_url, file_prefix, separator, time_format, sub_folder, img_type, ext, use_utc=True):
+def fetch_weather_img(
+    base_url,
+    file_prefix,
+    separator,
+    time_format,
+    sub_folder,
+    img_type,
+    ext,
+    use_utc=True,
+    initial_delay_minutes=20,
+    max_attempts=12,
+):
     headers = {'User-Agent': 'Mozilla/5.0'}
-    for i in range(4):
-        if use_utc:
-            now = datetime.now(timezone.utc) - timedelta(minutes=20 + (i * 10))
-        else:
-            now = datetime.now(timezone(timedelta(hours=8))) - timedelta(minutes=(i * 10))
-            
+    current_tz = timezone.utc if use_utc else TZ_TAIWAN
+
+    for i in range(max_attempts):
+        now = datetime.now(current_tz) - timedelta(minutes=initial_delay_minutes + (i * 10))
         rounded_minute = (now.minute // 10) * 10
         timestamp = now.replace(minute=rounded_minute, second=0, microsecond=0)
         time_tag = timestamp.strftime(time_format)
@@ -132,7 +142,7 @@ def fetch_weather_img(base_url, file_prefix, separator, time_format, sub_folder,
                 db_data = {"obs_time": time_tag_key, "image_url": file_path, "type": img_type}
                 supabase.table(TABLE_NAME).upsert(db_data, on_conflict="obs_time").execute()
                 return db_data
-        except:
+        except Exception:
             continue
     raise HTTPException(status_code=404, detail=f"Failed to fetch {img_type}")
 
@@ -207,7 +217,18 @@ async def stored_radar():
 
 @app.get("/stored-satellite")
 async def stored_satellite():
-    return fetch_weather_img("https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/", "TWI_IR1_MB_800", "-", "%Y-%m-%d-%H-%M", "cloud", "cloud_image", "jpg", True)
+    return fetch_weather_img(
+        "https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/",
+        "TWI_IR1_MB_800",
+        "-",
+        "%Y-%m-%d-%H-%M",
+        "cloud",
+        "cloud_image",
+        "jpg",
+        use_utc=False,
+        initial_delay_minutes=20,
+        max_attempts=12,
+    )
 
 
 @app.get("/last-3-hours")
