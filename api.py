@@ -1,4 +1,5 @@
 import os
+import logging
 import requests
 import pandas as pd
 from enum import Enum
@@ -13,6 +14,9 @@ from supabase import create_client, Client
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- 初始化配置 ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -129,9 +133,23 @@ def fetch_weather_img(
         timestamp = now.replace(minute=rounded_minute, second=0, microsecond=0)
         time_tag = timestamp.strftime(time_format)
         target_url = f"{base_url}{file_prefix}{separator}{time_tag}.{ext}"
-        
+
+        logger.info(
+            "Fetching weather image type=%s attempt=%s timestamp=%s url=%s",
+            img_type,
+            i + 1,
+            timestamp.isoformat(),
+            target_url,
+        )
+
         try:
             res = requests.get(target_url, headers=headers, timeout=10)
+            logger.info(
+                "Weather image response type=%s attempt=%s status=%s",
+                img_type,
+                i + 1,
+                res.status_code,
+            )
             if res.status_code == 200:
                 time_tag_key = timestamp.strftime("%Y-%m-%d-%H-%M")
                 file_path = f"cloud_image/{sub_folder}/{img_type}_{time_tag_key}.{ext}"
@@ -139,11 +157,24 @@ def fetch_weather_img(
                     path=file_path, file=res.content, 
                     file_options={"content-type": f"image/{ext}", "upsert": "true"}
                 )
-                db_data = {"obs_time": time_tag_key, "image_url": file_path, "type": img_type}
-                supabase.table(TABLE_NAME).upsert(db_data, on_conflict="obs_time").execute()
-                return db_data
-        except Exception:
+                logger.info(
+                    "Uploaded weather image type=%s obs_time=%s storage_path=%s",
+                    img_type,
+                    time_tag_key,
+                    file_path,
+                )
+                return save_weather_record(time_tag_key, file_path, img_type)
+        except Exception as exc:
+            logger.exception(
+                "Weather image fetch failed type=%s attempt=%s url=%s error=%s",
+                img_type,
+                i + 1,
+                target_url,
+                exc,
+            )
             continue
+
+    logger.warning("Weather image fetch exhausted type=%s attempts=%s", img_type, max_attempts)
     raise HTTPException(status_code=404, detail=f"Failed to fetch {img_type}")
 
 
@@ -155,6 +186,39 @@ def build_public_url(storage_path: str) -> str:
     if isinstance(public_url_response, dict):
         return public_url_response.get("publicURL", "")
     return public_url_response
+
+
+def save_weather_record(obs_time: str, image_url: str, img_type: str):
+    db_data = {"obs_time": obs_time, "image_url": image_url, "type": img_type}
+    existing = (
+        supabase.table(TABLE_NAME)
+        .select("id")
+        .eq("obs_time", obs_time)
+        .eq("type", img_type)
+        .limit(1)
+        .execute()
+    )
+
+    if existing.data:
+        record_id = existing.data[0]["id"]
+        logger.info(
+            "Updating weather record id=%s type=%s obs_time=%s image_url=%s",
+            record_id,
+            img_type,
+            obs_time,
+            image_url,
+        )
+        supabase.table(TABLE_NAME).update(db_data).eq("id", record_id).execute()
+    else:
+        logger.info(
+            "Inserting weather record type=%s obs_time=%s image_url=%s",
+            img_type,
+            obs_time,
+            image_url,
+        )
+        supabase.table(TABLE_NAME).insert(db_data).execute()
+
+    return db_data
 
 
 def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
