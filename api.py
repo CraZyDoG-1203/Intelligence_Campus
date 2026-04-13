@@ -215,7 +215,7 @@ async def get_last_3_hours_radar():
     return fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3)
 
 
-@app.get("/visible/last-3-hours")
+@app.get("/satellite/last-3-hours")
 async def get_last_3_hours_visible():
     return fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3)
 
