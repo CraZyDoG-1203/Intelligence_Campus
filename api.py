@@ -1,17 +1,20 @@
 import os
+import asyncio
 import logging
+from dataclasses import dataclass
+
 import requests
 import pandas as pd
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Security, status
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from supabase import create_client, Client
 from fastapi.middleware.cors import CORSMiddleware
+from postgrest.exceptions import APIError
 
 load_dotenv()
 
@@ -22,9 +25,17 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 API_KEY_NAME = "X-API-KEY"
-API_KEY = os.getenv("API_SECRET_KEY", "stan-default-secret")
+API_KEY = os.getenv("API_SECRET_KEY")
 BUCKET_NAME = "satellite-images"
 TABLE_NAME = "satellite_images"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
 RADAR_IMAGE_TYPES = ["radar_echo"]
 SATELLITE_IMAGE_TYPES = [
     "cloud_image",
@@ -34,10 +45,17 @@ SATELLITE_IMAGE_TYPES = [
     "cloud_visible",
     "visible",
 ]
+REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0"}
+WEATHER_FETCH_INTERVAL_MINUTES = 10
+WEATHER_UPSERT_CONFLICT = "obs_time,type"
 
 # 檢查 Supabase 設定是否存在，避免啟動崩潰
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY")
+if not API_KEY:
+    raise ValueError("Missing API_SECRET_KEY")
+if not ALLOWED_ORIGINS:
+    raise ValueError("Missing ALLOWED_ORIGINS")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
@@ -46,7 +64,7 @@ app = FastAPI(title="Integrated Sensor & Weather API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +89,12 @@ CATEGORY_CONFIG = {
 DEVICES = ['ab170023', 'ab170019', 'ab170010']
 TZ_TAIWAN = timezone(timedelta(hours=8))
 
+
+@dataclass
+class WeatherFetchResult:
+    response: requests.Response | None = None
+    error: Exception | None = None
+
 # --- 工具函式 ---
 async def get_api_key(api_key_from_header: str = Security(api_key_header)):
     if api_key_from_header == API_KEY:
@@ -81,17 +105,15 @@ class AeroboxManager:
     def __init__(self):
         self.supabase = supabase
 
-    def fetch_data(self, device_id):
-        # 修正時區設定
-        tz_tw = timezone(timedelta(hours=8))
-        now_taiwan = datetime.now(tz_tw)
-        after = (now_taiwan - timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+    async def fetch_data(self, device_id: str):
+        after = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
         url = f'https://cv2-aerobox.synclytic.app/api/v1.1/aerobox/raw?device={device_id}&protocolVersion=v1&limit=1&after={after}'
         try:
-            res = requests.get(url, timeout=10)
+            res = await asyncio.to_thread(requests.get, url, timeout=10)
             res.raise_for_status()
             data = res.json()
-            if not data: return None
+            if not data:
+                return None
             df = pd.json_normalize(data)
             return {
                 "device_id": device_id,
@@ -101,18 +123,102 @@ class AeroboxManager:
                 "temperature": float(df['Payload.Temp'].iloc[0]),
                 "humidity": float(df['Payload.Rh'].iloc[0])
             }
-        except Exception as e:
-            print(f"{device_id} fetch failed: {e}")
+        except requests.RequestException:
+            logger.exception("Aerobox fetch failed for device=%s url=%s", device_id, url)
             return None
 
-    def save_to_db(self, data):
+    async def save_to_db(self, data: Dict[str, Any]):
         try:
-            return self.supabase.table("box").insert(data).execute()
-        except Exception as e:
-            print(f"Supabase Error: {e}")
+            return await asyncio.to_thread(self.supabase.table("box").insert(data).execute)
+        except APIError:
+            logger.exception("Supabase box insert failed payload=%s", data)
             return None
 
-def fetch_weather_img(
+def format_utc_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_time_tag_key(timestamp: datetime) -> str:
+    return timestamp.strftime("%Y-%m-%d-%H-%M")
+
+
+async def upload_to_storage(file_path: str, content: bytes, ext: str):
+    return await asyncio.to_thread(
+        supabase.storage.from_(BUCKET_NAME).upload,
+        path=file_path,
+        file=content,
+        file_options={"content-type": f"image/{ext}", "upsert": "true"},
+    )
+
+
+async def delete_from_storage(file_path: str):
+    return await asyncio.to_thread(supabase.storage.from_(BUCKET_NAME).remove, [file_path])
+
+
+async def save_weather_record(obs_time: str, image_url: str, img_type: str):
+    db_data = {"obs_time": obs_time, "image_url": image_url, "type": img_type}
+    logger.info(
+        "Upserting weather record type=%s obs_time=%s image_url=%s",
+        img_type,
+        obs_time,
+        image_url,
+    )
+    return await asyncio.to_thread(
+        supabase.table(TABLE_NAME).upsert(
+            db_data,
+            on_conflict=WEATHER_UPSERT_CONFLICT,
+        ).execute
+    )
+
+
+async def persist_weather_image(obs_time: str, img_type: str, file_path: str, content: bytes, ext: str):
+    try:
+        await upload_to_storage(file_path, content, ext)
+        logger.info(
+            "Uploaded weather image type=%s obs_time=%s storage_path=%s",
+            img_type,
+            obs_time,
+            file_path,
+        )
+    except APIError:
+        logger.exception(
+            "Storage upload failed type=%s obs_time=%s storage_path=%s",
+            img_type,
+            obs_time,
+            file_path,
+        )
+        raise HTTPException(status_code=502, detail=f"Failed to upload {img_type}")
+
+    try:
+        await save_weather_record(obs_time, file_path, img_type)
+    except APIError:
+        logger.exception(
+            "Weather record upsert failed type=%s obs_time=%s storage_path=%s; deleting uploaded file",
+            img_type,
+            obs_time,
+            file_path,
+        )
+        try:
+            await delete_from_storage(file_path)
+            logger.info(
+                "Deleted uploaded file after DB failure type=%s obs_time=%s storage_path=%s",
+                img_type,
+                obs_time,
+                file_path,
+            )
+        except APIError:
+            logger.exception(
+                "Failed to delete uploaded file after DB failure type=%s obs_time=%s storage_path=%s",
+                img_type,
+                obs_time,
+                file_path,
+            )
+        raise HTTPException(status_code=502, detail=f"Failed to save {img_type} metadata")
+
+    return {"obs_time": obs_time, "image_url": file_path, "type": img_type}
+
+
+async def fetch_weather_img(
     base_url,
     file_prefix,
     separator,
@@ -124,12 +230,12 @@ def fetch_weather_img(
     initial_delay_minutes=20,
     max_attempts=12,
 ):
-    headers = {'User-Agent': 'Mozilla/5.0'}
     current_tz = timezone.utc if use_utc else TZ_TAIWAN
+    last_result = WeatherFetchResult()
 
     for i in range(max_attempts):
         now = datetime.now(current_tz) - timedelta(minutes=initial_delay_minutes + (i * 10))
-        rounded_minute = (now.minute // 10) * 10
+        rounded_minute = (now.minute // WEATHER_FETCH_INTERVAL_MINUTES) * WEATHER_FETCH_INTERVAL_MINUTES
         timestamp = now.replace(minute=rounded_minute, second=0, microsecond=0)
         time_tag = timestamp.strftime(time_format)
         target_url = f"{base_url}{file_prefix}{separator}{time_tag}.{ext}"
@@ -143,7 +249,13 @@ def fetch_weather_img(
         )
 
         try:
-            res = requests.get(target_url, headers=headers, timeout=10)
+            res = await asyncio.to_thread(
+                requests.get,
+                target_url,
+                headers=REQUEST_HEADERS,
+                timeout=10,
+            )
+            last_result = WeatherFetchResult(response=res)
             logger.info(
                 "Weather image response type=%s attempt=%s status=%s",
                 img_type,
@@ -151,20 +263,17 @@ def fetch_weather_img(
                 res.status_code,
             )
             if res.status_code == 200:
-                time_tag_key = timestamp.strftime("%Y-%m-%d-%H-%M")
+                time_tag_key = build_time_tag_key(timestamp)
                 file_path = f"cloud_image/{sub_folder}/{img_type}_{time_tag_key}.{ext}"
-                supabase.storage.from_(BUCKET_NAME).upload(
-                    path=file_path, file=res.content, 
-                    file_options={"content-type": f"image/{ext}", "upsert": "true"}
+                return await persist_weather_image(
+                    obs_time=time_tag_key,
+                    img_type=img_type,
+                    file_path=file_path,
+                    content=res.content,
+                    ext=ext,
                 )
-                logger.info(
-                    "Uploaded weather image type=%s obs_time=%s storage_path=%s",
-                    img_type,
-                    time_tag_key,
-                    file_path,
-                )
-                return save_weather_record(time_tag_key, file_path, img_type)
-        except Exception as exc:
+        except requests.RequestException as exc:
+            last_result = WeatherFetchResult(error=exc)
             logger.exception(
                 "Weather image fetch failed type=%s attempt=%s url=%s error=%s",
                 img_type,
@@ -175,7 +284,17 @@ def fetch_weather_img(
             continue
 
     logger.warning("Weather image fetch exhausted type=%s attempts=%s", img_type, max_attempts)
-    raise HTTPException(status_code=404, detail=f"Failed to fetch {img_type}")
+    if last_result.error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach upstream weather source for {img_type}",
+        )
+
+    last_status_code = last_result.response.status_code if last_result.response is not None else "unknown"
+    raise HTTPException(
+        status_code=404,
+        detail=f"No recent {img_type} image available from upstream source (last status: {last_status_code})",
+    )
 
 
 def build_public_url(storage_path: str) -> str:
@@ -188,48 +307,15 @@ def build_public_url(storage_path: str) -> str:
     return public_url_response
 
 
-def save_weather_record(obs_time: str, image_url: str, img_type: str):
-    db_data = {"obs_time": obs_time, "image_url": image_url, "type": img_type}
-    existing = (
-        supabase.table(TABLE_NAME)
-        .select("id")
-        .eq("obs_time", obs_time)
-        .eq("type", img_type)
-        .limit(1)
-        .execute()
-    )
-
-    if existing.data:
-        record_id = existing.data[0]["id"]
-        logger.info(
-            "Updating weather record id=%s type=%s obs_time=%s image_url=%s",
-            record_id,
-            img_type,
-            obs_time,
-            image_url,
-        )
-        supabase.table(TABLE_NAME).update(db_data).eq("id", record_id).execute()
-    else:
-        logger.info(
-            "Inserting weather record type=%s obs_time=%s image_url=%s",
-            img_type,
-            obs_time,
-            image_url,
-        )
-        supabase.table(TABLE_NAME).insert(db_data).execute()
-
-    return db_data
-
-
-def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
-    time_threshold = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d-%H-%M")
-    response = (
+async def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
+    time_threshold = build_time_tag_key(datetime.now(TZ_TAIWAN) - timedelta(hours=hours))
+    response = await asyncio.to_thread(
         supabase.table(TABLE_NAME)
         .select("id, obs_time, image_url, type")
         .in_("type", image_types)
         .gte("obs_time", time_threshold)
         .order("obs_time", desc=True)
-        .execute()
+        .execute
     )
 
     items = []
@@ -252,14 +338,16 @@ def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
 # --- API 路由 ---
 @app.get("/sensor/history")
 async def get_sensor_history(device_id: str = "ab170023"):
-    time_threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    time_threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
     # 將 desc 設為 True，這樣最新的資料就會排在 Array 的第一個 (Index 0)
-    response = supabase.table("box") \
-        .select("id, pm25, co2, temperature, humidity, created_at") \
-        .eq("device_id", device_id) \
-        .gte("created_at", time_threshold) \
-        .order("created_at", desc=True) \
-        .execute()
+    response = await asyncio.to_thread(
+        supabase.table("box")
+        .select("id, pm25, co2, temperature, humidity, created_at")
+        .eq("device_id", device_id)
+        .gte("created_at", time_threshold)
+        .order("created_at", desc=True)
+        .execute
+    )
     return response.data
 
 @app.get("/sensor/latest")
@@ -267,9 +355,9 @@ async def fetch_latest_sensors():
     manager = AeroboxManager()
     results = []
     for device_id in DEVICES:
-        data = manager.fetch_data(device_id)
+        data = await manager.fetch_data(device_id)
         if data:
-            manager.save_to_db(data)
+            await manager.save_to_db(data)
             results.append({"device_id": device_id, "status": "ok", "data": data})
         else:
             results.append({"device_id": device_id, "status": "not_found"})
@@ -277,11 +365,11 @@ async def fetch_latest_sensors():
 
 @app.get("/stored-radar")
 async def stored_radar():
-    return fetch_weather_img("https://www.cwa.gov.tw/Data/radar/", "CV1_3600", "_", "%Y%m%d%H%M", "radar", "radar_echo", "png", False)
+    return await fetch_weather_img("https://www.cwa.gov.tw/Data/radar/", "CV1_3600", "_", "%Y%m%d%H%M", "radar", "radar_echo", "png", False)
 
 @app.get("/stored-satellite")
 async def stored_satellite():
-    return fetch_weather_img(
+    return await fetch_weather_img(
         "https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/",
         "TWI_IR1_MB_800",
         "-",
@@ -297,17 +385,28 @@ async def stored_satellite():
 
 @app.get("/last-3-hours")
 async def get_last_3_hours_weather():
+    radar_data, satellite_data = await asyncio.gather(
+        fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3),
+        fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3),
+    )
     return {
         "status": "success",
         "hours": 3,
-        "radar": fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3)["data"],
-        "satellite": fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3)["data"],
+        "radar": radar_data["data"],
+        "satellite": satellite_data["data"],
     }
 
 @app.get("/marquees")
 async def get_active_marquees():
-    threshold = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    res = supabase.table("marquees").select("*").eq("is_active", True).gte("created_at", threshold).order("created_at", desc=True).execute()
+    threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
+    res = await asyncio.to_thread(
+        supabase.table("marquees")
+        .select("*")
+        .eq("is_active", True)
+        .gte("created_at", threshold)
+        .order("created_at", desc=True)
+        .execute
+    )
     processed = []
     for row in (res.data or []):
         row["content"] = f"{row.get('logo_url', '')} {row.get('content', '')}".strip()
@@ -318,10 +417,10 @@ async def get_active_marquees():
 async def create_marquee(item: MarqueeRequest):
     config = CATEGORY_CONFIG.get(item.category.value)
     data = {"content": item.content, "category": item.category.value, "logo_url": config["logo_url"], "is_active": True}
-    res = supabase.table("marquees").insert(data).execute()
+    res = await asyncio.to_thread(supabase.table("marquees").insert(data).execute)
     return {"status": "success", "data": res.data[0]}
 
 @app.delete("/marquees/{marquee_id}", dependencies=[Depends(get_api_key)])
 async def delete_marquee(marquee_id: int):
-    supabase.table("marquees").delete().eq("id", marquee_id).execute()
+    await asyncio.to_thread(supabase.table("marquees").delete().eq("id", marquee_id).execute)
     return {"status": "success", "message": f"Deleted ID: {marquee_id}"}

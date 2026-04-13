@@ -1,6 +1,6 @@
 import uvicorn
 from fastapi import FastAPI
-from api import app as api_app  
+from api import app as api_app, stored_radar, stored_satellite
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -13,6 +13,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/api", api_app)
+
+
+@app.get("/stored-radar")
+async def stored_radar_alias():
+    return await stored_radar()
+
+
+@app.get("/stored-satellite")
+async def stored_satellite_alias():
+    return await stored_satellite()
 
 @app.get("/")
 async def root():
