@@ -210,14 +210,14 @@ async def stored_satellite():
     return fetch_weather_img("https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/", "TWI_IR1_MB_800", "-", "%Y-%m-%d-%H-%M", "cloud", "cloud_image", "jpg", True)
 
 
-@app.get("/radar/last-3-hours")
-async def get_last_3_hours_radar():
-    return fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3)
-
-
-@app.get("/satellite/last-3-hours")
-async def get_last_3_hours_visible():
-    return fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3)
+@app.get("/last-3-hours")
+async def get_last_3_hours_weather():
+    return {
+        "status": "success",
+        "hours": 3,
+        "radar": fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3)["data"],
+        "satellite": fetch_recent_weather_images(SATELLITE_IMAGE_TYPES, hours=3)["data"],
+    }
 
 @app.get("/marquees")
 async def get_active_marquees():
