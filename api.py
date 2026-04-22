@@ -86,7 +86,7 @@ CATEGORY_CONFIG = {
     "pm25": {"name": "PM2.5相關", "logo_url": "🌫️"}
 }
 
-DEVICES = ['ab170023', 'ab170019', 'ab170010']
+DEVICES = ['ab170023', 'ab170019', 'ab170010'] #basketball court 10, volleyball court 19
 TZ_TAIWAN = timezone(timedelta(hours=8))
 
 
