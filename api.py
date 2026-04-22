@@ -339,13 +339,13 @@ async def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
 @app.get("/sensor/history")
 async def get_sensor_history(device_id: str = "ab170023"):
     time_threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
-    # 將 desc 設為 True，這樣最新的資料就會排在 Array 的第一個 (Index 0)
+    # 以 device_time 為準，將 desc 設為 True，這樣最新的資料就會排在 Array 的第一個 (Index 0)
     response = await asyncio.to_thread(
         supabase.table("box")
-        .select("id, pm25, co2, temperature, humidity, created_at")
+        .select("id, device_time, pm25, co2, temperature, humidity")
         .eq("device_id", device_id)
-        .gte("created_at", time_threshold)
-        .order("created_at", desc=True)
+        .gte("device_time", time_threshold)
+        .order("device_time", desc=True)
         .execute
     )
     return response.data
