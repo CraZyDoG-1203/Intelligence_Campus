@@ -134,6 +134,20 @@ class AeroboxManager:
             logger.exception("Supabase box insert failed payload=%s", data)
             return None
 
+
+async def get_latest_sensor_from_db(device_id: str):
+    response = await asyncio.to_thread(
+        supabase.table("box")
+        .select("id, device_id, device_time, pm25, co2, temperature, humidity")
+        .eq("device_id", device_id)
+        .order("device_time", desc=True)
+        .limit(1)
+        .execute
+    )
+
+    rows = response.data or []
+    return rows[0] if rows else None
+
 def format_utc_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -337,7 +351,7 @@ async def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
 
 # --- API 路由 ---
 @app.get("/sensor/history")
-async def get_sensor_history(device_id: str = "ab170023"):
+async def get_sensor_history(device_id: str):
     time_threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
     # 以 device_time 為準，將 desc 設為 True，這樣最新的資料就會排在 Array 的第一個 (Index 0)
     response = await asyncio.to_thread(
@@ -351,7 +365,25 @@ async def get_sensor_history(device_id: str = "ab170023"):
     return response.data
 
 @app.get("/sensor/latest")
-async def fetch_latest_sensors():
+async def fetch_latest_sensors(device_id: str | None = None):
+    if device_id:
+        data = await get_latest_sensor_from_db(device_id)
+        if data:
+            return {"device_id": device_id, "status": "ok", "data": data}
+        return {"device_id": device_id, "status": "not_found"}
+
+    results = []
+    for current_device_id in DEVICES:
+        data = await get_latest_sensor_from_db(current_device_id)
+        if data:
+            results.append({"device_id": current_device_id, "status": "ok", "data": data})
+        else:
+            results.append({"device_id": current_device_id, "status": "not_found"})
+    return {"results": results}
+
+
+@app.get("/sensor/fetch-latest")
+async def sync_latest_sensors():
     manager = AeroboxManager()
     results = []
     for device_id in DEVICES:
