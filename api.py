@@ -60,11 +60,7 @@ if not ALLOWED_ORIGINS:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
-app = FastAPI(
-    title="Integrated Sensor & Weather API",
-    docs_url=None,
-    redoc_url=None,
-)
+app = FastAPI(title="Integrated Sensor & Weather API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -354,7 +350,7 @@ async def get_sensor_history(device_id: str = "ab170023"):
     )
     return response.data
 
-@app.get("/sensor/latest", dependencies=[Depends(get_api_key)])
+@app.get("/sensor/latest")
 async def fetch_latest_sensors():
     manager = AeroboxManager()
     results = []
