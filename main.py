@@ -1,6 +1,6 @@
 import uvicorn
-from fastapi import FastAPI, Depends
-from api import app as api_app, stored_radar, stored_satellite, get_api_key
+from fastapi import FastAPI
+from api import app as api_app, stored_radar, stored_satellite
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -15,16 +15,16 @@ app.add_middleware(
 app.mount("/api", api_app)
 
 
-@app.get("/stored-radar", dependencies=[Depends(get_api_key)])
+@app.get("/stored-radar")
 async def stored_radar_alias():
     return await stored_radar()
 
 
-@app.get("/stored-satellite", dependencies=[Depends(get_api_key)])
+@app.get("/stored-satellite")
 async def stored_satellite_alias():
     return await stored_satellite()
 
-@app.get("/", dependencies=[Depends(get_api_key)])
+@app.get("/")
 async def root():
     return {
         "message": "Integrated Sensor & Weather & Marquee API",

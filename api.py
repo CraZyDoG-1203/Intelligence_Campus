@@ -340,7 +340,7 @@ async def fetch_recent_weather_images(image_types: List[str], hours: int = 3):
     }
 
 # --- API 路由 ---
-@app.get("/sensor/history", dependencies=[Depends(get_api_key)])
+@app.get("/sensor/history")
 async def get_sensor_history(device_id: str = "ab170023"):
     time_threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
     # 以 device_time 為準，將 desc 設為 True，這樣最新的資料就會排在 Array 的第一個 (Index 0)
@@ -367,11 +367,11 @@ async def fetch_latest_sensors():
             results.append({"device_id": device_id, "status": "not_found"})
     return {"results": results}
 
-@app.get("/stored-radar", dependencies=[Depends(get_api_key)])
+@app.get("/stored-radar")
 async def stored_radar():
     return await fetch_weather_img("https://www.cwa.gov.tw/Data/radar/", "CV1_3600", "_", "%Y%m%d%H%M", "radar", "radar_echo", "png", False)
 
-@app.get("/stored-satellite", dependencies=[Depends(get_api_key)])
+@app.get("/stored-satellite")
 async def stored_satellite():
     return await fetch_weather_img(
         "https://www.cwa.gov.tw/Data/satellite/TWI_IR1_MB_800/",
@@ -387,7 +387,7 @@ async def stored_satellite():
     )
 
 
-@app.get("/last-3-hours", dependencies=[Depends(get_api_key)])
+@app.get("/last-3-hours")
 async def get_last_3_hours_weather():
     radar_data, satellite_data = await asyncio.gather(
         fetch_recent_weather_images(RADAR_IMAGE_TYPES, hours=3),
@@ -400,7 +400,7 @@ async def get_last_3_hours_weather():
         "satellite": satellite_data["data"],
     }
 
-@app.get("/marquees", dependencies=[Depends(get_api_key)])
+@app.get("/marquees")
 async def get_active_marquees():
     threshold = format_utc_timestamp(datetime.now(timezone.utc) - timedelta(hours=24))
     res = await asyncio.to_thread(
