@@ -38,12 +38,18 @@
 
 API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 
+所有自訂 API 路由都需要在 request header 帶入：
+
+```http
+X-API-KEY: your-secret-key
+```
+
 ### Sensor
 
 - `GET /api/sensor/history?device_id=ab170023`
-  - 取得指定裝置近 24 小時的歷史資料
+  - 取得指定裝置近 24 小時的歷史資料，需要 API Key
 - `GET /api/sensor/latest`
-  - 讀取預設裝置清單的最新感測器資料，並寫入 Supabase `box` table
+  - 讀取預設裝置清單的最新感測器資料，並寫入 Supabase `box` table，需要 API Key
 
 預設裝置：
 
@@ -54,11 +60,11 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 ### Weather Images
 
 - `GET /api/stored-radar`
-  - 抓取最新可用雷達影像，並上傳至 Supabase Storage
+  - 抓取最新可用雷達影像，並上傳至 Supabase Storage，需要 API Key
 - `GET /api/stored-satellite`
-  - 抓取最新可用衛星雲圖，並上傳至 Supabase Storage
+  - 抓取最新可用衛星雲圖，並上傳至 Supabase Storage，需要 API Key
 - `GET /api/last-3-hours`
-  - 直接從 Supabase `satellite_images` table 讀取近 3 小時的雷達回波與可見光圖資料
+  - 直接從 Supabase `satellite_images` table 讀取近 3 小時的雷達回波與可見光圖資料，需要 API Key
 
 影像資料會寫入：
 
@@ -68,7 +74,7 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 ### Marquees
 
 - `GET /api/marquees`
-  - 取得最近 24 小時內啟用中的跑馬燈
+  - 取得最近 24 小時內啟用中的跑馬燈，需要 API Key
 - `POST /api/marquees`
   - 建立跑馬燈，需要 API Key
 - `DELETE /api/marquees/{marquee_id}`
@@ -89,12 +95,6 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 }
 ```
 
-需要驗證的路由請在 header 帶入：
-
-```http
-X-API-KEY: your-secret-key
-```
-
 ## Environment Variables
 
 請先建立 `.env`：
@@ -109,12 +109,12 @@ API_SECRET_KEY=your_api_secret_key
 
 - `SUPABASE_URL`: Supabase 專案 URL
 - `SUPABASE_KEY`: Supabase API Key
-- `API_SECRET_KEY`: 跑馬燈寫入與刪除使用的 API Key
+- `API_SECRET_KEY`: 保護所有自訂 API 路由使用的 API Key
 
 注意：
 
 - 若缺少 `SUPABASE_URL` 或 `SUPABASE_KEY`，應用程式啟動時會直接報錯。
-- 若未設定 `API_SECRET_KEY`，程式會退回預設值 `stan-default-secret`。正式環境請務必覆蓋。
+- 若未設定 `API_SECRET_KEY`，應用程式啟動時會直接報錯。
 
 ## Installation
 
@@ -151,19 +151,22 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 取得最新感測器資料：
 
 ```bash
-curl http://127.0.0.1:8000/api/sensor/latest
+curl http://127.0.0.1:8000/api/sensor/latest \
+  -H "X-API-KEY: your-secret-key"
 ```
 
 取得歷史資料：
 
 ```bash
-curl "http://127.0.0.1:8000/api/sensor/history?device_id=ab170023"
+curl "http://127.0.0.1:8000/api/sensor/history?device_id=ab170023" \
+  -H "X-API-KEY: your-secret-key"
 ```
 
 取得近 3 小時雷達與可見光圖：
 
 ```bash
-curl http://127.0.0.1:8000/api/last-3-hours
+curl http://127.0.0.1:8000/api/last-3-hours \
+  -H "X-API-KEY: your-secret-key"
 ```
 
 建立跑馬燈：
