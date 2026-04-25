@@ -40,10 +40,12 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 
 ### Sensor
 
-- `GET /api/sensor/history?device_id=ab170023`
-  - 取得指定裝置近 24 小時的歷史資料
+- `GET /api/sensor/history?device_id=裝置ID`
+  - 取得指定裝置近 24 小時的歷史資料，`device_id` 為必填
 - `GET /api/sensor/latest`
-  - 讀取預設裝置清單的最新感測器資料，並寫入 Supabase `box` table
+  - 讀取 Supabase `box` table 中感測器最新資料；可帶 `device_id` 查單一裝置，未帶則回傳預設裝置清單各自最新一筆
+- `GET /api/sensor/fetch-latest`
+  - 同步 API。向外部 Aerobox API 抓取預設裝置清單的最新感測器資料，整理欄位後寫入 Supabase `box` table，回傳每台裝置同步成功或失敗的結果
 
 預設裝置：
 
@@ -152,6 +154,18 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 curl http://127.0.0.1:8000/api/sensor/latest
+```
+
+取得指定裝置最新感測器資料：
+
+```bash
+curl "http://127.0.0.1:8000/api/sensor/latest?device_id=ab170023"
+```
+
+抓取並同步最新感測器資料到資料庫：
+
+```bash
+curl http://127.0.0.1:8000/api/sensor/fetch-latest
 ```
 
 取得歷史資料：
