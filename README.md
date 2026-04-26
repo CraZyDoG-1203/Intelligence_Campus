@@ -53,6 +53,15 @@ API 掛載在 `/api` 之下，因此實際呼叫路徑如下：
 - `ab170019`
 - `ab170010`
 
+Aerobox 校正規則：
+
+- `pm25` 不分室內外，回傳值使用 `校正後 PM2.5 = (0.7 * 原始 PM2.5) - 10.18`
+- `temperature` 依裝置類型套用公式
+- 室內溫度：`校正後溫度 = (1.06 * 原始溫度) - 2.28`
+- 室外溫度：`校正後溫度 = (1.16 * 原始溫度) - 4.63`
+- 目前 `ab170010`、`ab170019` 依室內公式校正；其餘未明確標註裝置預設也走室內公式，可在 `api.py` 的 `TEMPERATURE_CALIBRATION_TYPE_BY_DEVICE` 調整
+- `sensor/latest`、`sensor/history`、`sensor/fetch-latest` 的回傳值都會套用校正；資料庫中的原始欄位內容不會被覆寫
+
 ### Weather Images
 
 - `GET /api/stored-radar`

@@ -86,7 +86,18 @@ CATEGORY_CONFIG = {
     "pm25": {"name": "PM2.5相關", "logo_url": "🌫️"}
 }
 
-DEVICES = ['ab170023', 'ab170019', 'ab170010'] #basketball court 10, volleyball court 19
+DEVICES = ["ab170023", "ab170019", "ab170010"]
+PM25_CALIBRATION_SLOPE = 0.7
+PM25_CALIBRATION_OFFSET = -10.18
+INDOOR_TEMPERATURE_CALIBRATION_SLOPE = 1.06
+INDOOR_TEMPERATURE_CALIBRATION_OFFSET = -2.28
+OUTDOOR_TEMPERATURE_CALIBRATION_SLOPE = 1.16
+OUTDOOR_TEMPERATURE_CALIBRATION_OFFSET = -4.63
+TEMPERATURE_CALIBRATION_TYPE_BY_DEVICE = {
+    "ab170010": "indoor",
+    "ab170019": "indoor",
+}
+DEFAULT_TEMPERATURE_CALIBRATION_TYPE = "indoor"
 TZ_TAIWAN = timezone(timedelta(hours=8))
 
 
@@ -100,6 +111,66 @@ async def get_api_key(api_key_from_header: str = Security(api_key_header)):
     if api_key_from_header == API_KEY:
         return api_key_from_header
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
+
+
+def coerce_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_temperature_calibration_type(device_id: str | None) -> str:
+    if not device_id:
+        return DEFAULT_TEMPERATURE_CALIBRATION_TYPE
+    return TEMPERATURE_CALIBRATION_TYPE_BY_DEVICE.get(
+        device_id,
+        DEFAULT_TEMPERATURE_CALIBRATION_TYPE,
+    )
+
+
+def calibrate_pm25(value: Any) -> float | None:
+    raw_value = coerce_float(value)
+    if raw_value is None:
+        return None
+    return round((PM25_CALIBRATION_SLOPE * raw_value) + PM25_CALIBRATION_OFFSET, 2)
+
+
+def calibrate_temperature(value: Any, device_id: str | None) -> float | None:
+    raw_value = coerce_float(value)
+    if raw_value is None:
+        return None
+
+    calibration_type = resolve_temperature_calibration_type(device_id)
+    if calibration_type == "outdoor":
+        return round(
+            (OUTDOOR_TEMPERATURE_CALIBRATION_SLOPE * raw_value) + OUTDOOR_TEMPERATURE_CALIBRATION_OFFSET,
+            2,
+        )
+
+    return round(
+        (INDOOR_TEMPERATURE_CALIBRATION_SLOPE * raw_value) + INDOOR_TEMPERATURE_CALIBRATION_OFFSET,
+        2,
+    )
+
+
+def calibrate_sensor_payload(
+    data: Dict[str, Any] | None,
+    device_id: str | None = None,
+) -> Dict[str, Any] | None:
+    if not data:
+        return data
+
+    calibrated = dict(data)
+    resolved_device_id = device_id or calibrated.get("device_id")
+    calibrated["pm25"] = calibrate_pm25(calibrated.get("pm25"))
+    calibrated["temperature"] = calibrate_temperature(
+        calibrated.get("temperature"),
+        resolved_device_id,
+    )
+    return calibrated
 
 class AeroboxManager:
     def __init__(self):
@@ -146,7 +217,7 @@ async def get_latest_sensor_from_db(device_id: str):
     )
 
     rows = response.data or []
-    return rows[0] if rows else None
+    return calibrate_sensor_payload(rows[0]) if rows else None
 
 def format_utc_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -361,7 +432,10 @@ async def get_sensor_history(device_id: str):
         .order("device_time", desc=True)
         .execute
     )
-    return response.data
+    return [
+        calibrate_sensor_payload(row, device_id=device_id)
+        for row in (response.data or [])
+    ]
 
 @app.get("/sensor/latest")
 async def fetch_latest_sensors(device_id: str | None = None):
@@ -389,7 +463,13 @@ async def sync_latest_sensors():
         data = await manager.fetch_data(device_id)
         if data:
             await manager.save_to_db(data)
-            results.append({"device_id": device_id, "status": "ok", "data": data})
+            results.append(
+                {
+                    "device_id": device_id,
+                    "status": "ok",
+                    "data": calibrate_sensor_payload(data, device_id=device_id),
+                }
+            )
         else:
             results.append({"device_id": device_id, "status": "not_found"})
     return {"results": results}
