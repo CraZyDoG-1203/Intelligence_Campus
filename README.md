@@ -59,6 +59,7 @@ Aerobox 校正規則：
 - `temperature` 依裝置類型套用公式
 - 室內溫度：`校正後溫度 = (1.06 * 原始溫度) - 2.28`
 - 室外溫度：`校正後溫度 = (1.16 * 原始溫度) - 4.63`
+- 若校正後數值小於 `0`，API 回傳時會顯示為 `0`
 - 目前 `ab170010`、`ab170019` 依室內公式校正；其餘未明確標註裝置預設也走室內公式，可在 `api.py` 的 `TEMPERATURE_CALIBRATION_TYPE_BY_DEVICE` 調整
 - `sensor/latest`、`sensor/history`、`sensor/fetch-latest` 的回傳值都會套用校正；資料庫中的原始欄位內容不會被覆寫
 

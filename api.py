@@ -135,7 +135,8 @@ def calibrate_pm25(value: Any) -> float | None:
     raw_value = coerce_float(value)
     if raw_value is None:
         return None
-    return round((PM25_CALIBRATION_SLOPE * raw_value) + PM25_CALIBRATION_OFFSET, 2)
+    calibrated_value = round((PM25_CALIBRATION_SLOPE * raw_value) + PM25_CALIBRATION_OFFSET, 2)
+    return max(calibrated_value, 0)
 
 
 def calibrate_temperature(value: Any, device_id: str | None) -> float | None:
@@ -145,15 +146,17 @@ def calibrate_temperature(value: Any, device_id: str | None) -> float | None:
 
     calibration_type = resolve_temperature_calibration_type(device_id)
     if calibration_type == "outdoor":
-        return round(
+        calibrated_value = round(
             (OUTDOOR_TEMPERATURE_CALIBRATION_SLOPE * raw_value) + OUTDOOR_TEMPERATURE_CALIBRATION_OFFSET,
             2,
         )
+        return max(calibrated_value, 0)
 
-    return round(
+    calibrated_value = round(
         (INDOOR_TEMPERATURE_CALIBRATION_SLOPE * raw_value) + INDOOR_TEMPERATURE_CALIBRATION_OFFSET,
         2,
     )
+    return max(calibrated_value, 0)
 
 
 def calibrate_sensor_payload(
