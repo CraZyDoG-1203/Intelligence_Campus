@@ -1,4 +1,4 @@
-# Intelligence Campus
+# Intelligence Campus api
 
 一個使用 FastAPI 建立的整合型後端服務，提供校園感測器資料、天氣影像快取，以及跑馬燈公告管理功能。
 
